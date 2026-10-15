@@ -90,11 +90,20 @@
     <form method="dialog" class="modal-close"><button class="icon-button" aria-label="Close">×</button></form>
     <div class="auth-copy"><p class="eyebrow">TAPLINK ADMINISTRATION</p><h2 id="auth-title">Admin sign in</h2><p class="muted">Sign in to create and manage customer link pages.</p></div>
     <form id="auth-form">
+      <div class="is-hidden" id="first-admin-name-row">
+        <label class="field-label" for="first-admin-name">Admin name</label>
+        <input class="field" id="first-admin-name" maxlength="120" autocomplete="name">
+      </div>
       <label class="field-label" for="auth-email">Email address</label><input class="field" id="auth-email" type="email" required autocomplete="email">
       <label class="field-label" for="auth-password">Password</label>
       <div class="password-input-wrap">
-        <input class="field" id="auth-password" type="password" minlength="1" maxlength="200" required autocomplete="current-password" aria-describedby="auth-error">
+        <input class="field" id="auth-password" type="password" minlength="10" maxlength="200" required autocomplete="current-password" aria-describedby="auth-error">
         <button class="password-toggle" id="toggle-password" type="button" aria-controls="auth-password" aria-pressed="false">Show</button>
+      </div>
+      <p class="field-help is-hidden" id="first-admin-password-hint">Use at least 10 characters for the new admin password.</p>
+      <div class="is-hidden" id="first-admin-confirm-row">
+        <label class="field-label" for="first-admin-password-confirm">Confirm password</label>
+        <input class="field" id="first-admin-password-confirm" type="password" minlength="10" maxlength="200" autocomplete="new-password">
       </div>
       <p class="auth-error is-hidden" id="auth-error" role="alert" aria-live="assertive" tabindex="-1"></p>
       <button class="button button-primary button-wide" id="auth-submit" type="submit">
@@ -102,6 +111,7 @@
         <span id="auth-submit-label">Sign in</span>
       </button>
     </form>
+    <button class="text-link first-admin-toggle is-hidden" id="first-admin-toggle" type="button">First time setup? Create the admin account</button>
   </dialog>
 </body>
 </html>

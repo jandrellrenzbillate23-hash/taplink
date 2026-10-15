@@ -14,6 +14,7 @@ const socialHosts = {
 };
 const pageTemplates = ["studio", "noir", "editorial", "orbit", "garden", "card"];
 const bootstrapAdminEmail = process.env.TAPLINK_ADMIN_EMAIL?.trim().toLowerCase();
+const bootstrapAdminSignupEnabled = process.env.TAPLINK_ADMIN_SIGNUP_ENABLED === "true";
 
 const db = getDatabase();
 const photos = getStore("taplink-profile-photos");
@@ -55,12 +56,25 @@ async function ensureProfile(user) {
     values (
       ${user.id}, ${user.email ?? ""}, ${defaultName},
       ${slugFromName(defaultName, user.id)},
-      case when ${isBootstrapAdmin} then 'admin' else 'user' end
+      case
+        when ${isBootstrapAdmin}
+          and not exists (select 1 from profiles where role = 'admin')
+        then 'admin'
+        else 'user'
+      end
     )
     on conflict (user_id) do update
       set email = excluded.email,
           name = case when profiles.name = '' then excluded.name else profiles.name end,
-          role = case when ${isBootstrapAdmin} then 'admin' else profiles.role end
+          role = case
+            when ${isBootstrapAdmin}
+              and not exists (
+                select 1 from profiles other
+                where other.role = 'admin' and other.user_id <> profiles.user_id
+              )
+            then 'admin'
+            else profiles.role
+          end
   `;
   const rows = await db.sql`select * from profiles where user_id = ${user.id} limit 1`;
   const profile = rows[0];
@@ -315,6 +329,16 @@ async function handle(request, context) {
   }
   if (method === "GET" && action === "profile_photo") {
     return serveProfilePhoto(request, context, url.searchParams.get("u") ?? "");
+  }
+  if (method === "GET" && action === "admin_setup") {
+    if (!bootstrapAdminSignupEnabled || !bootstrapAdminEmail) {
+      return json(200, { available: false });
+    }
+    const admins = await db.sql`select count(*)::int as count from profiles where role = 'admin'`;
+    return json(200, {
+      available: admins[0].count === 0,
+      email: admins[0].count === 0 ? bootstrapAdminEmail : undefined,
+    });
   }
   if (!["GET", "POST"].includes(method)) throw new ApiError(405, "Method not allowed.");
 

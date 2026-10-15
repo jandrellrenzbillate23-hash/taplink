@@ -156,12 +156,40 @@ function setupAuth() {
   const spinner = document.querySelector("#auth-spinner");
   const passwordInput = document.querySelector("#auth-password");
   const passwordToggle = document.querySelector("#toggle-password");
+  const firstAdminToggle = document.querySelector("#first-admin-toggle");
+  const firstAdminName = document.querySelector("#first-admin-name");
+  const firstAdminPasswordConfirm = document.querySelector("#first-admin-password-confirm");
+  let creatingFirstAdmin = false;
+  let firstAdminSetup = null;
   const clearAuthError = () => {
     authError.textContent = "";
     authError.classList.add("is-hidden");
-    document.querySelectorAll("#auth-email, #auth-password").forEach((input) => {
+    authError.classList.remove("auth-info");
+    document.querySelectorAll("#auth-email, #auth-password, #first-admin-name, #first-admin-password-confirm").forEach((input) => {
       input.removeAttribute("aria-invalid");
     });
+  };
+  const setAuthMode = (createAdmin) => {
+    creatingFirstAdmin = createAdmin;
+    clearAuthError();
+    document.querySelector("#auth-title").textContent = createAdmin ? "Create first admin account" : "Admin sign in";
+    firstAdminToggle.textContent = createAdmin ? "Back to admin sign in" : "First time setup? Create the admin account";
+    document.querySelector("#first-admin-name-row").classList.toggle("is-hidden", !createAdmin);
+    document.querySelector("#first-admin-name").required = createAdmin;
+    document.querySelector("#first-admin-confirm-row").classList.toggle("is-hidden", !createAdmin);
+    firstAdminPasswordConfirm.required = createAdmin;
+    document.querySelector("#first-admin-password-hint").classList.toggle("is-hidden", !createAdmin);
+    passwordInput.minLength = createAdmin ? 10 : 1;
+    passwordInput.autocomplete = createAdmin ? "new-password" : "current-password";
+    submitLabel.textContent = createAdmin ? "Create admin account" : "Sign in";
+    passwordInput.value = "";
+    firstAdminPasswordConfirm.value = "";
+    if (createAdmin && firstAdminSetup?.email) {
+      document.querySelector("#auth-email").value = firstAdminSetup.email;
+      document.querySelector("#auth-email").readOnly = true;
+    } else {
+      document.querySelector("#auth-email").readOnly = false;
+    }
   };
   passwordToggle.addEventListener("click", () => {
     const showingPassword = passwordInput.type === "password";
@@ -179,11 +207,17 @@ function setupAuth() {
   };
   document.querySelectorAll("[data-open-auth]").forEach((button) => button.addEventListener("click", () => {
     clearAuthError();
+    setAuthMode(false);
     dialog.showModal();
   }));
-  document.querySelectorAll("#auth-email, #auth-password").forEach((input) => {
+  firstAdminToggle.addEventListener("click", () => setAuthMode(!creatingFirstAdmin));
+  document.querySelectorAll("#auth-email, #auth-password, #first-admin-name, #first-admin-password-confirm").forEach((input) => {
     input.addEventListener("input", clearAuthError);
   });
+  void api("admin_setup").then((setup) => {
+    firstAdminSetup = setup;
+    firstAdminToggle.classList.toggle("is-hidden", !setup.available);
+  }).catch(displayError);
   document.querySelector("#auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     clearAuthError();
@@ -194,6 +228,26 @@ function setupAuth() {
       }
       const email = document.querySelector("#auth-email").value.trim();
       const password = document.querySelector("#auth-password").value;
+      if (creatingFirstAdmin) {
+        if (!firstAdminSetup?.available || email.toLowerCase() !== firstAdminSetup.email?.toLowerCase()) {
+          throw new Error("First-admin setup is unavailable. Check the TAPLINK_ADMIN_EMAIL and TAPLINK_ADMIN_SIGNUP_ENABLED site settings.");
+        }
+        if (password !== firstAdminPasswordConfirm.value) {
+          firstAdminPasswordConfirm.setAttribute("aria-invalid", "true");
+          throw new Error("The passwords do not match.");
+        }
+        await signup(email, password, { full_name: firstAdminName.value.trim() });
+        const registeredUser = await getUser();
+        if (!registeredUser) {
+          authError.textContent = "Admin account created. Check your email and confirm the address, then sign in with the password you just created.";
+          authError.classList.remove("is-hidden");
+          authError.classList.add("auth-info");
+          return;
+        }
+        await updateSession(registeredUser);
+        dialog.close();
+        return;
+      }
       const currentUser = await login(email, password);
       await updateSession(currentUser);
       dialog.close();

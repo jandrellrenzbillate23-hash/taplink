@@ -198,9 +198,10 @@ function setupAuth() {
       await updateSession(currentUser);
       dialog.close();
     } catch (error) {
-      authError.textContent = error instanceof Error
-        ? error.message
-        : "Something went wrong. Please try again.";
+      const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+      authError.textContent = error?.status === 404 || /\b404\b/.test(message)
+        ? "Netlify Identity is not enabled for this site (the Identity endpoint returned 404). In Netlify, open Site configuration → Identity and enable Identity, then reload this page. This cannot be fixed by changing the login form."
+        : message;
       authError.classList.remove("is-hidden");
       const invalidInput = error?.status === 400 || error?.status === 422;
       if (invalidInput) {

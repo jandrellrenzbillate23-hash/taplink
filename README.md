@@ -4,13 +4,13 @@ TapLink is a responsive link-page app for personal and business profiles. Profil
 
 ## Deploy to Netlify
 
-Netlify does not execute PHP. The Netlify version uses a static frontend, Netlify Functions, Netlify Identity for authentication, Netlify Database (managed PostgreSQL) for app data, and Netlify Blobs for private profile photos. It starts with a fresh database; it does not import accounts, profiles, or photos from an existing MySQL installation.
+Netlify does not execute PHP. The Netlify version uses a static frontend, Netlify Functions, Netlify Identity for administrator authentication, and Netlify Database (managed PostgreSQL) for app data. Customer pages do not have accounts; administrators create and manage their pages and share the resulting link. It starts with a fresh customer-page database; it does not import accounts, profiles, or photos from an existing MySQL installation.
 
 1. Create or connect the site in Netlify, then provision a Netlify Database for it using the Netlify UI or `netlify database init`.
-2. Enable Netlify Identity in the site’s identity settings and enable user registration if new accounts should be allowed.
+2. Enable Netlify Identity. Create or invite the site administrator through Netlify Identity, and disable public sign-ups in the Identity settings. Customers do not create accounts; administrators create and manage their link pages in TapLink.
 3. Connect this repository and deploy using [`netlify.toml`](./netlify.toml). It builds the frontend bundle and deploys the Functions. The publish directory must remain `public`; do not publish the repository root. Netlify must use Node.js 22.12.0 or later.
-4. The SQL migration in [`netlify/database/migrations/0001_taplink_schema.sql`](./netlify/database/migrations/0001_taplink_schema.sql) creates the application tables. Confirm the migration has been applied to the provisioned database.
-5. Create your first account and sign in so TapLink creates its profile row. In the Netlify Database SQL editor, promote that account to administrator; replace the email with its account email:
+4. Netlify applies SQL migrations from `netlify/database/migrations/` during deployment, including the customer page table.
+5. Sign in once as the administrator so TapLink creates the administrator profile row. In the Netlify Database SQL editor, promote that account; replace the email with the administrator’s email:
 
    ```sql
    update profiles
@@ -18,9 +18,9 @@ Netlify does not execute PHP. The Netlify version uses a static frontend, Netlif
    where lower(email) = lower('admin@example.com');
    ```
 
-6. Reload the site to use the administrator tools.
+6. Sign in again or reload. The admin dashboard can now create customer pages, choose from six designs, publish or edit pages, and copy each customer’s shareable link.
 
-Netlify Identity handles registration, login, and confirmation emails. Netlify Blobs stores profile photos privately and serves them through the API. The curated `public` directory keeps PHP sources, database migrations, and local storage files out of Netlify's static publish output.
+Netlify Identity is used only for administrator sign-in. Keep public registration disabled in the Netlify Identity settings; the site intentionally has no customer signup flow. Customer photos can be provided as HTTPS image URLs. The curated `public` directory keeps PHP sources, database migrations, and local storage files out of Netlify's static publish output.
 
 For local Netlify development, install dependencies and use `netlify dev` with the site linked and its Netlify services provisioned.
 
@@ -60,20 +60,20 @@ For a public deployment, configure the database connection and administrator pas
 
 ## Features
 
-- Responsive landing page and personal/business link-page editor
-- Account registration, sign-in, and sign-out
-- Profile picture, display name, headline, company, and bio
+- Responsive landing page and administrator dashboard for customer pages
+- Administrator sign-in and customer-page management (customers do not need accounts)
+- Customer profile photo URL, display name, headline, company, and bio
 - Link buttons generated from the saved website, Instagram, Facebook, TikTok, LinkedIn, X, YouTube, WhatsApp, Telegram, phone, email, and location fields
 - Publish controls, shareable profile URL, dark mode, and public contact-card download
-- Administrator account and application-name management
-- Netlify Identity authentication, Netlify Database persistence, private Netlify Blobs photo storage, and protected Netlify Function operations
+- Six link-page designs: Studio, Noir, Editorial, Orbit, Garden, and Card
+- Netlify Identity administrator authentication, Netlify Database persistence, and protected Netlify Function operations
 
 ## Important notes
 
-- Profile details and social links are private until the owner publishes their page. After publishing, anyone with its link can see the public details and download the public contact card.
-- Users add social profile URLs in **My link page → Social profiles**. Those existing profile fields automatically become buttons on the published page; there is no separate custom-link list.
-- Personal and business profiles can show a JPG, PNG, or WebP picture (maximum 5 MB), plus a tappable location link that opens Google Maps.
-- This feature stores social profile URLs; it does not log in to social networks or request OAuth access.
+- On Netlify, admins enter customer details and social URLs in the dashboard. A page stays private as a draft until an admin publishes it; anyone with its link can then view the public details and download the contact card.
+- Customer photos are entered as HTTPS image URLs. A location becomes a tappable Google Maps link.
+- Social URLs become tap-ready page buttons; TapLink does not log in to social networks or request OAuth access.
 - Netlify profile URLs use the `?u=slug` query format. A `localhost` profile URL is only reachable from the local computer.
+- The XAMPP version remains a separate legacy PHP application and retains its own user-account flow.
 - When upgrading, the migration does not delete old scan/template tables or custom-link data. Those legacy data are retained in the database but are no longer shown or used by TapLink.
 - Use HTTPS outside local development. Configure the web server and database backups before deploying the application publicly.

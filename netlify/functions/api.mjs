@@ -1,6 +1,6 @@
 import { getStore } from "@netlify/blobs";
 import { getDatabase } from "@netlify/database";
-import { admin, getUser } from "@netlify/identity";
+import { getUser } from "@netlify/identity";
 
 const socialHosts = {
   instagram: ["instagram.com"],
@@ -12,6 +12,7 @@ const socialHosts = {
   whatsapp: ["wa.me", "whatsapp.com"],
   telegram: ["t.me", "telegram.me", "telegram.org"],
 };
+const pageTemplates = ["studio", "noir", "editorial", "orbit", "garden", "card"];
 
 const db = getDatabase();
 const photos = getStore("taplink-profile-photos");
@@ -145,6 +146,19 @@ function validatedProfile(data) {
   };
 }
 
+function validatedCustomerPage(data) {
+  const profile = validatedProfile({ ...data, is_published: data.is_published === true });
+  const template = data.template ?? "studio";
+  if (!pageTemplates.includes(template)) {
+    throw new ApiError(422, "Choose one of the available page designs.");
+  }
+  const photoUrl = optionalText(data.photo_url ?? "", "Photo URL", 1000);
+  if (photoUrl && (!isHttpsUrl(photoUrl) || !validUrl(photoUrl))) {
+    throw new ApiError(422, "Enter a valid photo URL beginning with https://.");
+  }
+  return { ...profile, template, photo_url: photoUrl };
+}
+
 function isHttpsUrl(value) {
   try {
     return new URL(value).protocol === "https:";
@@ -210,15 +224,23 @@ async function publicProfile(slug) {
   if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) {
     throw new ApiError(404, "Profile not found.");
   }
+  const customerRows = await db.sql`
+    select name, slug, profile_type, headline, company, bio, phone, public_email,
+           website, location, social_links, photo_url, template, is_published
+    from customer_pages
+    where slug = ${slug} and is_published = true
+    limit 1
+  `;
+  if (customerRows[0]) return customerRows[0];
   const rows = await db.sql`
     select name, slug, profile_type, headline, company, bio, phone, public_email,
-           website, location, social_links, photo_path
+           website, location, social_links, photo_path, is_published
     from profiles
     where slug = ${slug} and is_published = true and is_active = true
     limit 1
   `;
   if (!rows[0]) throw new ApiError(404, "Profile not found or not published.");
-  return rows[0];
+  return { ...rows[0], photo_url: null, template: "studio" };
 }
 
 function photoUrl(slug) {
@@ -271,31 +293,6 @@ async function serveProfilePhoto(request, context, slug) {
   });
 }
 
-async function adminUsers() {
-  const identityUsers = [];
-  for (let page = 1; ; page += 1) {
-    const pageUsers = await admin.listUsers({ page, perPage: 100 });
-    identityUsers.push(...pageUsers);
-    if (pageUsers.length < 100) break;
-  }
-  const profiles = await db.sql`
-    select user_id, email, name, role, is_active, created_at
-    from profiles
-  `;
-  const byId = new Map(profiles.map((profile) => [profile.user_id, profile]));
-  return identityUsers.map((user) => {
-    const profile = byId.get(user.id);
-    return {
-      id: user.id,
-      name: profile?.name || user.userMetadata?.full_name || "",
-      email: profile?.email || user.email || "",
-      role: profile?.role || "user",
-      is_active: profile?.is_active === false ? 0 : 1,
-      created_at: profile?.created_at ?? user.createdAt,
-    };
-  }).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-}
-
 async function handle(request, context) {
   const url = new URL(request.url);
   const method = request.method;
@@ -303,7 +300,7 @@ async function handle(request, context) {
 
   if (method === "GET" && action === "public_profile") {
     const profile = await publicProfile(url.searchParams.get("u") ?? "");
-    return json(200, { profile: { ...profile, photo_url: profile.photo_path ? photoUrl(profile.slug) : null, photo_path: undefined } });
+    return json(200, { profile: { ...profile, photo_url: profile.photo_path ? photoUrl(profile.slug) : profile.photo_url, photo_path: undefined } });
   }
   if (method === "GET" && action === "profile_photo") {
     return serveProfilePhoto(request, context, url.searchParams.get("u") ?? "");
@@ -312,20 +309,92 @@ async function handle(request, context) {
 
   const auth = await authenticatedUser();
   if (method === "GET" && action === "profile_settings") {
+    await requireAdmin(auth);
     return json(200, { profile: await profileSettings(auth) });
   }
   if (method === "GET" && action === "admin") {
     await requireAdmin(auth);
-    const [users, settings] = await Promise.all([
-      adminUsers(),
-      db.sql`select setting_value from app_settings where setting_key = 'app_name' limit 1`,
-    ]);
-    return json(200, { stats: { users: users.length }, users, appName: settings[0]?.setting_value || "TapLink" });
+    const pages = await db.sql`select count(*)::int as count from customer_pages`;
+    return json(200, { customerPages: pages[0].count });
+  }
+  if (method === "GET" && action === "customer_pages") {
+    await requireAdmin(auth);
+    const pages = await db.sql`
+      select id, name, slug, profile_type, headline, company, bio, phone,
+             public_email, website, location, photo_url, social_links,
+             template, is_published, created_at, updated_at
+      from customer_pages
+      order by updated_at desc
+    `;
+    return json(200, { pages });
   }
 
   if (method !== "POST") throw new ApiError(404, "Not found.");
 
+  if (action === "customer_page_save") {
+    await requireAdmin(auth);
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new ApiError(400, "Invalid request body.");
+    const profile = validatedCustomerPage(data);
+    const id = typeof data.id === "string" && data.id ? data.id : null;
+    if (id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      throw new ApiError(422, "Invalid customer page identifier.");
+    }
+    const existingProfile = await db.sql`select user_id from profiles where slug = ${profile.slug} limit 1`;
+    if (existingProfile[0]) {
+      throw new ApiError(409, "That page address is already used by an existing profile.");
+    }
+    try {
+      if (id) {
+        const updated = await db.sql`
+          update customer_pages set
+            name = ${profile.name}, slug = ${profile.slug}, profile_type = ${profile.profile_type},
+            headline = ${profile.headline}, company = ${profile.company}, bio = ${profile.bio},
+            phone = ${profile.phone}, public_email = ${profile.public_email},
+            website = ${profile.website}, location = ${profile.location}, photo_url = ${profile.photo_url},
+            social_links = ${JSON.stringify(profile.social_links)}::jsonb, template = ${profile.template},
+            is_published = ${profile.is_published}, updated_at = now()
+          where id = ${id} returning id
+        `;
+        if (!updated[0]) throw new ApiError(404, "Customer page not found.");
+      } else {
+        await db.sql`
+          insert into customer_pages (
+            name, slug, profile_type, headline, company, bio, phone, public_email,
+            website, location, photo_url, social_links, template, is_published
+          ) values (
+            ${profile.name}, ${profile.slug}, ${profile.profile_type}, ${profile.headline},
+            ${profile.company}, ${profile.bio}, ${profile.phone}, ${profile.public_email},
+            ${profile.website}, ${profile.location}, ${profile.photo_url},
+            ${JSON.stringify(profile.social_links)}::jsonb, ${profile.template}, ${profile.is_published}
+          )
+        `;
+      }
+    } catch (error) {
+      if (error.code === "23505") throw new ApiError(409, "That page address is already in use. Choose another.");
+      throw error;
+    }
+    return json(200, { ok: true, slug: profile.slug, name: profile.name });
+  }
+
+  if (action === "customer_page_delete") {
+    await requireAdmin(auth);
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data.id !== "string" || !data.id) throw new ApiError(422, "Choose a customer page to remove.");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.id)) {
+      throw new ApiError(422, "Invalid customer page identifier.");
+    }
+    const deleted = await db.sql`delete from customer_pages where id = ${data.id} returning id`;
+    if (!deleted[0]) throw new ApiError(404, "Customer page not found.");
+    return json(200, { ok: true });
+  }
+
   if (action === "profile_save") {
+    await requireAdmin(auth);
     const data = await request.json().catch(() => {
       throw new ApiError(400, "Invalid JSON request body.");
     });
@@ -349,6 +418,7 @@ async function handle(request, context) {
   }
 
   if (action === "profile_photo_upload") {
+    await requireAdmin(auth);
     let form;
     try {
       form = await request.formData();
@@ -393,6 +463,7 @@ async function handle(request, context) {
   }
 
   if (action === "profile_photo_delete") {
+    await requireAdmin(auth);
     await db.sql`
       update profiles set photo_path = null, updated_at = now()
       where user_id = ${auth.user.id}

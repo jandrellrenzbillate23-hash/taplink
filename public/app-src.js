@@ -1,4 +1,4 @@
-import { getUser, handleAuthCallback, login, logout, onAuthChange, signup } from "@netlify/identity";
+import { getUser, handleAuthCallback, login, logout, onAuthChange } from "@netlify/identity";
 
 const toast = (message, kind = "success") => {
   const item = document.createElement("div");
@@ -16,66 +16,23 @@ function displayError(error) {
   toast(error instanceof Error ? error.message : "Something went wrong. Please try again.", "error");
 }
 
-async function api(action, { method = "GET", body } = {}) {
+async function api(action, { method = "GET", body, params = {} } = {}) {
   const options = { method, credentials: "same-origin", headers: {} };
   if (body instanceof FormData) {
     options.body = body;
   } else if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
+    options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
-  const response = await fetch(`/api?action=${encodeURIComponent(action)}`, options);
+  const query = new URLSearchParams({ action, ...params });
+  const response = await fetch(`/api?${query}`, options);
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
-  return result;
-}
-
-function setProfilePhoto(photoUrl) {
-  const preview = document.querySelector("#profile-photo-preview");
-  preview.replaceChildren();
-  if (photoUrl) {
-    const image = document.createElement("img");
-    image.src = photoUrl;
-    image.alt = "Profile picture preview";
-    preview.append(image);
-    document.querySelector("#remove-profile-photo").classList.remove("is-hidden");
-  } else {
-    const placeholder = document.createElement("span");
-    placeholder.textContent = "⌁";
-    preview.append(placeholder);
-    document.querySelector("#remove-profile-photo").classList.add("is-hidden");
+  if (!response.ok) {
+    const error = new Error(result.error || `Request failed (${response.status}).`);
+    error.status = response.status;
+    throw error;
   }
-}
-
-function setProfileLink(slug, published) {
-  const url = new URL(`/?u=${encodeURIComponent(slug)}`, location.origin).href;
-  document.querySelector("#profile-url-prefix").textContent = `${location.origin}/?u=`;
-  document.querySelector("#profile-link-preview").textContent = url;
-  const preview = document.querySelector("#preview-profile");
-  preview.href = url;
-  preview.classList.toggle("is-hidden", !published);
-  document.querySelector("#copy-profile-link").disabled = !published;
-}
-
-async function loadProfileSettings() {
-  const { profile } = await api("profile_settings");
-  document.querySelector("#profile-name").value = profile.name;
-  document.querySelector("#profile-slug").value = profile.slug;
-  document.querySelector("#profile-type").value = profile.profile_type;
-  document.querySelector("#profile-headline").value = profile.headline;
-  document.querySelector("#profile-company").value = profile.company;
-  document.querySelector("#profile-bio").value = profile.bio;
-  document.querySelector("#profile-phone").value = profile.phone;
-  document.querySelector("#profile-email").value = profile.public_email;
-  document.querySelector("#profile-website").value = profile.website;
-  document.querySelector("#profile-location").value = profile.location;
-  document.querySelector("#profile-published").checked = profile.is_published;
-  document.querySelectorAll(".social-input").forEach((input) => {
-    input.value = profile.social_links?.[input.dataset.network] ?? "";
-  });
-  setProfilePhoto(profile.photo_url);
-  setProfileLink(profile.slug, profile.is_published);
-  return profile;
+  return result;
 }
 
 function activateView(viewName) {
@@ -142,9 +99,12 @@ async function showPublicProfile(slug) {
   container.classList.remove("is-hidden");
   document.body.classList.add("public-profile-page");
   container.textContent = "Loading profile…";
-  const { profile } = await api(`public_profile&u=${encodeURIComponent(slug)}`);
+  const { profile } = await api("public_profile", { params: { u: slug } });
   const description = profile.headline || profile.company || `Connect with ${profile.name}`;
   const links = socialButtons(profile);
+  const template = ["studio", "noir", "editorial", "orbit", "garden", "card"].includes(profile.template) ? profile.template : "studio";
+  container.className = `public-profile-card template-${template}`;
+  document.body.dataset.profileTemplate = template;
   container.innerHTML = `
     <div class="public-profile-topbar"><a class="brand profile-brand" href="/"><span class="brand-mark">⌁</span><span>taplink<span class="brand-light">.</span></span></a><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" title="Switch to dark mode">◐</button></div>
     ${profile.photo_url ? `<img class="public-profile-avatar" src="${escapeHtml(profile.photo_url)}" alt="${escapeHtml(profile.name)} profile picture">` : `<div class="public-profile-avatar">${escapeHtml(Array.from(profile.name)[0] || "T")}</div>`}
@@ -157,7 +117,7 @@ async function showPublicProfile(slug) {
       ? links.map((item) => `<a class="linktree-button" href="${escapeHtml(item.href)}"${item.href.startsWith("https://") ? ' target="_blank" rel="noopener noreferrer"' : ""}><span class="linktree-button-icon">${escapeHtml(item.icon)}</span><span>${escapeHtml(item.label)}</span><span class="linktree-button-arrow">↗</span></a>`).join("")
       : '<p class="public-profile-empty-links">This page has no public links yet.</p>'}</div>
     <div class="public-profile-actions"><button class="button button-primary button-wide" id="download-contact">Save contact <span>↓</span></button><button class="button button-secondary button-wide" id="share-profile" type="button">Share profile <span>↗</span></button></div>
-    <footer class="public-profile-footer">A little more connected. <a href="/">Create your TapLink</a></footer>
+    <footer class="public-profile-footer">A little more connected. <a href="/">Powered by TapLink</a></footer>
   `;
   container.querySelector("#download-contact").addEventListener("click", () => downloadVcard(profile));
   container.querySelector("#share-profile").addEventListener("click", async () => {
@@ -194,11 +154,10 @@ function setupAuth() {
   const submitButton = document.querySelector("#auth-submit");
   const submitLabel = document.querySelector("#auth-submit-label");
   const spinner = document.querySelector("#auth-spinner");
-  let mode = "register";
   const clearAuthError = () => {
     authError.textContent = "";
     authError.classList.add("is-hidden");
-    document.querySelectorAll("#auth-name, #auth-email, #auth-password").forEach((input) => {
+    document.querySelectorAll("#auth-email, #auth-password").forEach((input) => {
       input.removeAttribute("aria-invalid");
     });
   };
@@ -206,31 +165,13 @@ function setupAuth() {
     submitButton.disabled = submitting;
     submitButton.setAttribute("aria-busy", String(submitting));
     spinner.classList.toggle("is-hidden", !submitting);
-    submitLabel.textContent = submitting
-      ? (mode === "register" ? "Creating account…" : "Signing in…")
-      : (mode === "register" ? "Create account" : "Log in");
-  };
-  const setMode = (nextMode) => {
-    mode = nextMode;
-    clearAuthError();
-    const registering = mode === "register";
-    document.querySelector("#auth-title").textContent = registering ? "Create your account" : "Welcome back";
-    submitLabel.textContent = registering ? "Create account" : "Log in";
-    document.querySelector("#register-name-row").classList.toggle("is-hidden", !registering);
-    document.querySelector("#auth-name").required = registering;
-    document.querySelector("#auth-password").autocomplete = registering ? "new-password" : "current-password";
-    document.querySelector("#auth-password").minLength = registering ? 10 : 1;
-    document.querySelector("#password-hint").classList.toggle("is-hidden", !registering);
-    document.querySelector("#auth-switch-copy").textContent = registering ? "Already have an account?" : "New to TapLink?";
-    document.querySelector("#auth-switch-button").textContent = registering ? "Log in" : "Create an account";
+    submitLabel.textContent = submitting ? "Signing in…" : "Sign in";
   };
   document.querySelectorAll("[data-open-auth]").forEach((button) => button.addEventListener("click", () => {
     clearAuthError();
-    setMode(button.dataset.openAuth);
     dialog.showModal();
   }));
-  document.querySelector("#auth-switch-button").addEventListener("click", () => setMode(mode === "register" ? "login" : "register"));
-  document.querySelectorAll("#auth-name, #auth-email, #auth-password").forEach((input) => {
+  document.querySelectorAll("#auth-email, #auth-password").forEach((input) => {
     input.addEventListener("input", clearAuthError);
   });
   document.querySelector("#auth-form").addEventListener("submit", async (event) => {
@@ -243,18 +184,6 @@ function setupAuth() {
       }
       const email = document.querySelector("#auth-email").value.trim();
       const password = document.querySelector("#auth-password").value;
-      if (mode === "register") {
-        await signup(email, password, { full_name: document.querySelector("#auth-name").value.trim() });
-        const currentUser = await getUser();
-        if (!currentUser) {
-          dialog.close();
-          toast("Check your email to confirm your account, then sign in.");
-          return;
-        }
-        await updateSession(currentUser);
-        dialog.close();
-        return;
-      }
       const currentUser = await login(email, password);
       await updateSession(currentUser);
       dialog.close();
@@ -281,34 +210,48 @@ async function updateSession(session) {
   landing.classList.toggle("is-hidden", Boolean(session));
   workspace.classList.toggle("is-hidden", !session);
   if (!session) return;
-  const name = session.userMetadata?.full_name || session.email || "TapLink user";
+  try {
+    await api("admin");
+  } catch (error) {
+    landing.classList.remove("is-hidden");
+    workspace.classList.add("is-hidden");
+    await logout();
+    if (error.status === 403) {
+      throw new Error("This account is not an administrator. Ask the site owner to grant admin access.");
+    }
+    throw error;
+  }
+  const name = session.name || session.email || "TapLink admin";
   document.querySelector("#header-name").textContent = name;
   document.querySelector("#user-avatar").textContent = Array.from(name)[0]?.toUpperCase() || "T";
-  const profile = await loadProfileSettings();
-  const isAdmin = profile.role === "admin";
-  document.querySelector("#admin-nav").classList.toggle("is-hidden", !isAdmin);
-  const profileName = document.querySelector("#profile-name").value || name;
-  document.querySelector("#header-name").textContent = profileName;
-  document.querySelector("#user-avatar").textContent = Array.from(profileName)[0]?.toUpperCase() || "T";
-  activateView(location.hash === "#admin" && isAdmin ? "admin" : "profile");
+  activateView("admin");
 }
 
 async function loadAdmin() {
-  const result = await api("admin");
-  document.querySelector('[data-admin-stat="users"]').textContent = result.stats.users;
-  document.querySelector("#app-name").value = result.appName;
-  document.querySelector("#admin-user-rows").innerHTML = result.users.map((user) => `
-    <tr><td><b>${escapeHtml(user.name)}</b></td><td>${escapeHtml(user.email)}</td><td>
-      <select class="field admin-role" data-id="${escapeHtml(user.id)}" aria-label="Role for ${escapeHtml(user.name)}"><option value="user" ${user.role === "user" ? "selected" : ""}>User</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Admin</option></select></td>
-      <td>${escapeHtml(new Intl.DateTimeFormat().format(new Date(user.created_at)))}</td><td><span class="status-badge ${user.is_active ? "status-active" : "status-disabled"}">${user.is_active ? "Active" : "Disabled"}</span></td>
-      <td><button class="button button-small ${user.is_active ? "button-secondary" : "button-primary"} toggle-user" data-id="${escapeHtml(user.id)}" data-active="${user.is_active ? "true" : "false"}">${user.is_active ? "Disable" : "Enable"}</button></td></tr>`).join("");
+  const { pages } = await api("customer_pages");
+  const container = document.querySelector("#customer-page-list");
+  document.querySelector("#customer-count").textContent = `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
+  if (!pages.length) {
+    container.innerHTML = '<p class="customer-empty">No customer pages yet. Create one to get started.</p>';
+    return;
+  }
+  container.innerHTML = pages.map((page) => {
+    const url = new URL(`/?u=${encodeURIComponent(page.slug)}`, location.origin).href;
+    return `<article class="customer-page-row">
+      <div class="customer-page-info"><span class="template-swatch template-swatch-${escapeHtml(page.template)}"></span>
+        <div><h3>${escapeHtml(page.name)}</h3><p>${escapeHtml(page.slug)} · ${escapeHtml(page.template)} · <span class="${page.is_published ? "customer-published" : "customer-draft"}">${page.is_published ? "Published" : "Draft"}</span></p></div>
+      </div>
+      <div class="customer-page-actions">
+        ${page.is_published ? `<button class="button button-secondary button-small" type="button" data-customer-action="copy" data-url="${escapeHtml(url)}">Copy link</button><a class="button button-secondary button-small" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Preview ↗</a>` : ""}
+        <button class="button button-secondary button-small" type="button" data-customer-action="edit" data-id="${escapeHtml(page.id)}">Edit</button>
+        <button class="button button-quiet button-small" type="button" data-customer-action="delete" data-id="${escapeHtml(page.id)}" data-name="${escapeHtml(page.name)}">Delete</button>
+      </div>
+    </article>`;
+  }).join("");
+  container.customerPages = pages;
 }
 
 function setupWorkspace() {
-  document.querySelectorAll("[data-view]").forEach((link) => link.addEventListener("click", () => {
-    activateView(link.dataset.view);
-    location.hash = link.dataset.view;
-  }));
   document.querySelector("#logout-button").addEventListener("click", async () => {
     try {
       await logout();
@@ -317,108 +260,105 @@ function setupWorkspace() {
     }
     location.reload();
   });
-  document.querySelector("#profile-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const body = {
-      name: document.querySelector("#profile-name").value,
-      slug: document.querySelector("#profile-slug").value,
-      profile_type: document.querySelector("#profile-type").value,
-      headline: document.querySelector("#profile-headline").value,
-      company: document.querySelector("#profile-company").value,
-      bio: document.querySelector("#profile-bio").value,
-      phone: document.querySelector("#profile-phone").value,
-      public_email: document.querySelector("#profile-email").value,
-      website: document.querySelector("#profile-website").value,
-      location: document.querySelector("#profile-location").value,
-      social_links: Object.fromEntries(Array.from(document.querySelectorAll(".social-input")).map((input) => [input.dataset.network, input.value])),
-      is_published: document.querySelector("#profile-published").checked,
-    };
-    try {
-      const result = await api("profile_save", { method: "POST", body });
-      document.querySelector("#header-name").textContent = result.name;
-      document.querySelector("#user-avatar").textContent = Array.from(result.name)[0]?.toUpperCase() || "T";
-      setProfileLink(result.slug, body.is_published);
-      toast("Link page saved.");
-    } catch (error) {
-      displayError(error);
-    }
+  const form = document.querySelector("#customer-form");
+  const editor = document.querySelector("#customer-editor-panel");
+  const clearForm = () => {
+    form.reset();
+    document.querySelector("#customer-id").value = "";
+    document.querySelector("#customer-url-prefix").textContent = `${location.origin}/?u=`;
+    document.querySelector("#customer-template").value = "studio";
+    document.querySelector("#customer-form-title").textContent = "Create a page";
+    document.querySelector("#save-customer-page").textContent = "Save customer page";
+  };
+  const editPage = (page) => {
+    document.querySelector("#customer-id").value = page.id;
+    document.querySelector("#customer-name").value = page.name;
+    document.querySelector("#customer-slug").value = page.slug;
+    document.querySelector("#customer-type").value = page.profile_type;
+    document.querySelector("#customer-template").value = page.template;
+    document.querySelector("#customer-headline").value = page.headline;
+    document.querySelector("#customer-company").value = page.company;
+    document.querySelector("#customer-phone").value = page.phone;
+    document.querySelector("#customer-email").value = page.public_email;
+    document.querySelector("#customer-photo").value = page.photo_url;
+    document.querySelector("#customer-website").value = page.website;
+    document.querySelector("#customer-location").value = page.location;
+    document.querySelector("#customer-bio").value = page.bio;
+    document.querySelector("#customer-published").checked = page.is_published;
+    document.querySelectorAll(".customer-social-input").forEach((input) => {
+      input.value = page.social_links?.[input.dataset.network] ?? "";
+    });
+    document.querySelector("#customer-form-title").textContent = `Edit ${page.name}`;
+    document.querySelector("#save-customer-page").textContent = "Save changes";
+    editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  document.querySelector("#customer-url-prefix").textContent = `${location.origin}/?u=`;
+  document.querySelector("#new-customer-page").addEventListener("click", () => {
+    clearForm();
+    editor.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelector("#customer-name").focus();
   });
-  document.querySelector("#profile-photo-file").addEventListener("change", async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const status = document.querySelector("#profile-photo-status");
-    const uploadButton = document.querySelector('label[for="profile-photo-file"]');
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
-      event.target.value = "";
-      toast("Choose a JPG, PNG, or WebP photo smaller than 5 MB.", "error");
-      return;
-    }
-    const form = new FormData();
-    form.append("photo", file);
-    uploadButton.setAttribute("aria-disabled", "true");
-    status.textContent = "Uploading…";
+  document.querySelector("#cancel-customer-edit").addEventListener("click", clearForm);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = document.querySelector("#save-customer-page");
+    button.disabled = true;
     try {
-      const result = await api("profile_photo_upload", { method: "POST", body: form });
-      setProfilePhoto(result.photo_url);
-      status.textContent = "Photo uploaded.";
-      toast("Profile photo uploaded.");
+      const body = {
+        id: document.querySelector("#customer-id").value || undefined,
+        name: document.querySelector("#customer-name").value,
+        slug: document.querySelector("#customer-slug").value,
+        profile_type: document.querySelector("#customer-type").value,
+        template: document.querySelector("#customer-template").value,
+        headline: document.querySelector("#customer-headline").value,
+        company: document.querySelector("#customer-company").value,
+        phone: document.querySelector("#customer-phone").value,
+        public_email: document.querySelector("#customer-email").value,
+        photo_url: document.querySelector("#customer-photo").value,
+        website: document.querySelector("#customer-website").value,
+        location: document.querySelector("#customer-location").value,
+        bio: document.querySelector("#customer-bio").value,
+        social_links: Object.fromEntries(Array.from(document.querySelectorAll(".customer-social-input")).map((input) => [input.dataset.network, input.value])),
+        is_published: document.querySelector("#customer-published").checked,
+      };
+      const result = await api("customer_page_save", { method: "POST", body });
+      clearForm();
+      await loadAdmin();
+      toast(`Page saved for ${result.name}.`);
     } catch (error) {
-      status.textContent = "";
       displayError(error);
     } finally {
-      uploadButton.removeAttribute("aria-disabled");
-      event.target.value = "";
+      button.disabled = false;
     }
   });
-  document.querySelector("#remove-profile-photo").addEventListener("click", async () => {
-    try {
-      await api("profile_photo_delete", { method: "POST", body: {} });
-      setProfilePhoto(null);
-      document.querySelector("#profile-photo-status").textContent = "Photo removed.";
-      toast("Profile photo removed.");
-    } catch (error) {
-      displayError(error);
-    }
-  });
-  document.querySelector("#copy-profile-link").addEventListener("click", async () => {
-    const url = document.querySelector("#profile-link-preview").textContent;
-    try {
-      await navigator.clipboard.writeText(url);
-      toast("Your profile link has been copied.");
-    } catch {
-      window.prompt("Copy your profile link:", url);
-    }
-  });
-  document.querySelector("#admin-user-rows").addEventListener("change", async (event) => {
-    if (!event.target.matches(".admin-role")) return;
-    const row = event.target.closest("tr");
-    try {
-      await api("admin_user_update", { method: "POST", body: { id: event.target.dataset.id, role: event.target.value, active: row.querySelector(".toggle-user").dataset.active === "true" } });
-      toast("User role updated.");
-      await loadAdmin();
-    } catch (error) {
-      displayError(error);
-      await loadAdmin().catch(displayError);
-    }
-  });
-  document.querySelector("#admin-user-rows").addEventListener("click", async (event) => {
-    const button = event.target.closest(".toggle-user");
+  document.querySelector("#customer-page-list").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-customer-action]");
     if (!button) return;
-    try {
-      await api("admin_user_update", { method: "POST", body: { id: button.dataset.id, role: button.closest("tr").querySelector(".admin-role").value, active: button.dataset.active !== "true" } });
-      toast("Account status updated.");
-      await loadAdmin();
-    } catch (error) {
-      displayError(error);
+    if (button.dataset.customerAction === "copy") {
+      const url = button.dataset.url;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("Customer link copied.");
+      } catch {
+        window.prompt("Copy the customer page link:", url);
+      }
+      return;
     }
-  });
-  document.querySelector("#settings-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api("admin_settings", { method: "POST", body: { app_name: document.querySelector("#app-name").value } });
-      toast("Application name saved.");
-    } catch (error) {
-      displayError(error);
+    const page = document.querySelector("#customer-page-list").customerPages.find((item) => item.id === button.dataset.id);
+    if (!page) return;
+    if (button.dataset.customerAction === "edit") {
+      editPage(page);
+      return;
+    }
+    if (button.dataset.customerAction === "delete" && window.confirm(`Delete the page for ${page.name}? This cannot be undone.`)) {
+      try {
+        await api("customer_page_delete", { method: "POST", body: { id: page.id } });
+        if (document.querySelector("#customer-id").value === page.id) clearForm();
+        await loadAdmin();
+        toast("Customer page deleted.");
+      } catch (error) {
+        displayError(error);
+      }
     }
   });
 }

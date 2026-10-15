@@ -1,16 +1,41 @@
 # TapLink
 
-TapLink is a responsive PHP/MySQL website for creating personal and business link pages. A profile can show a photo, introduction, website, existing social profiles, public contact details, and a tappable business location. Visitors get one mobile-friendly page with buttons for the details the owner chose to publish.
+TapLink is a responsive link-page app for personal and business profiles. Profiles can show a photo, introduction, website, social profiles, public contact details, and a tappable business location.
 
-## Requirements
+## Deploy to Netlify
+
+Netlify does not execute PHP. The Netlify version uses the static `index.html` frontend, Netlify Functions, and Supabase for authentication, PostgreSQL data, and private photo storage. It starts with a fresh Supabase database; it does not import accounts, profiles, or photos from an existing MySQL installation.
+
+1. Create a Supabase project.
+2. In the Supabase SQL Editor, run [`supabase/schema.sql`](./supabase/schema.sql).
+3. In Supabase **Authentication → URL Configuration**, set the Site URL to your Netlify URL and add that URL to the allowed redirect URLs. For local Netlify testing, add `http://localhost:8888`.
+4. In Netlify, connect this repository and use the settings from [`netlify.toml`](./netlify.toml): publish directory `public` and functions directory `netlify/functions`. The build command copies the shared styles and theme script into the curated publish folder. Deploy from the connected repository so Netlify also builds and deploys the Functions; do not publish the repository root.
+5. In the Netlify site’s environment variables, add these values for the Functions runtime:
+   - `SUPABASE_URL` — the project URL
+   - `SUPABASE_ANON_KEY` — the project’s anon/public API key
+   - `SUPABASE_SERVICE_ROLE_KEY` — the service-role secret; keep it private and never add it to frontend code
+6. Redeploy the Netlify site after setting the variables.
+7. Create the first account, then promote it to administrator in the Supabase SQL Editor. Replace the email with the account’s email:
+
+   ```sql
+   update auth.users
+   set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"role":"admin"}'::jsonb
+   where lower(email) = lower('admin@example.com');
+   ```
+
+   Sign out and back in for the administrator role to appear in the session.
+
+Supabase Auth controls whether new accounts can register. To close registration, disable new user sign-ups in the Supabase Authentication settings. Profile images are stored in a private Supabase Storage bucket and served using short-lived signed URLs. The curated `public` directory keeps PHP sources, database scripts, and local storage files out of Netlify's static publish output.
+
+## Run the PHP version locally
+
+The original PHP/MySQL version remains available for local XAMPP use and PHP-capable hosting. It is not the version Netlify runs.
 
 - PHP 8.1 or later with PDO MySQL, `mbstring`, and sessions enabled
 - MySQL 8.0+ or MariaDB 10.5+
 - HTTPS for public deployment
 
-GitHub can host the project source, but GitHub Pages cannot run this PHP/MySQL application. To run the live website, deploy the project to a PHP-capable web host and configure a MySQL-compatible database.
-
-## Local setup with XAMPP
+### XAMPP setup
 
 1. Copy the project folder into `C:\xampp\htdocs`.
 2. Start Apache and MySQL in the XAMPP Control Panel.
@@ -44,7 +69,7 @@ For a public deployment, configure the database connection and administrator pas
 - Link buttons generated from the saved website, Instagram, Facebook, TikTok, LinkedIn, X, YouTube, WhatsApp, Telegram, phone, email, and location fields
 - Publish controls, shareable profile URL, dark mode, and public contact-card download
 - Administrator account and application-name management
-- Session-based authentication, CSRF protection for changes, prepared SQL statements, and password hashing
+- Supabase authentication, row-level security for profile data, and protected Netlify Function operations
 
 ## Important notes
 
@@ -52,6 +77,6 @@ For a public deployment, configure the database connection and administrator pas
 - Users add social profile URLs in **My link page → Social profiles**. Those existing profile fields automatically become buttons on the published page; there is no separate custom-link list.
 - Personal and business profiles can show a JPG, PNG, or WebP picture (maximum 5 MB), plus a tappable location link that opens Google Maps.
 - This feature stores social profile URLs; it does not log in to social networks or request OAuth access.
-- A `localhost` profile URL is only reachable from the local computer. Publish TapLink on an HTTPS domain before sharing profiles with other people.
+- Netlify profile URLs use the `?u=slug` query format. A `localhost` profile URL is only reachable from the local computer.
 - When upgrading, the migration does not delete old scan/template tables or custom-link data. Those legacy data are retained in the database but are no longer shown or used by TapLink.
 - Use HTTPS outside local development. Configure the web server and database backups before deploying the application publicly.

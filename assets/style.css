@@ -47,6 +47,7 @@ h3 { font-size: 1.08rem; }
 .auth-spinner { width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: auth-spin .7s linear infinite; }
 .auth-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #f4d4d2; border-radius: 9px; color: #a03939; background: #fff7f6; font-size: .86rem; line-height: 1.45; }
 .auth-error.auth-info { border-color: #d8cff6; color: #55428f; background: #f7f4ff; }
+.auth-setup-status { margin: 13px 0 0; padding: 10px 12px; border: 1px solid #e4def6; border-radius: 9px; color: #57458b; background: #f8f6ff; font-size: .78rem; line-height: 1.45; }
 .first-admin-toggle { display: block; margin: 14px auto 0; font-size: .78rem; }
 .password-input-wrap { position: relative; }
 .password-input-wrap > .field { padding-right: 68px; }
@@ -681,6 +682,7 @@ html[data-theme="dark"] .modal { color: #eeedf5; border-color: #3c3947; backgrou
 html[data-theme="dark"] .password-toggle { color: #d0c3ff; }
 html[data-theme="dark"] .password-toggle:hover { background: #332d43; }
 html[data-theme="dark"] .auth-error.auth-info { border-color: #494061; color: #d0c3ff; background: #2c2739; }
+html[data-theme="dark"] .auth-setup-status { border-color: #494061; color: #d0c3ff; background: #2c2739; }
 html[data-theme="dark"] .checkbox-field { color: #c1becb; }
 html[data-theme="dark"] code { color: #ddd6f7; background: #34303f; }
 html[data-theme="dark"] .public-profile-page { background: radial-gradient(ellipse at top, #29243a, #17161e 58%); }

@@ -1,4 +1,4 @@
-import { getUser, handleAuthCallback, login, logout, onAuthChange } from "@netlify/identity";
+import { getUser, handleAuthCallback, login, logout, onAuthChange, signup } from "@netlify/identity";
 
 const toast = (message, kind = "success") => {
   const item = document.createElement("div");
@@ -157,6 +157,7 @@ function setupAuth() {
   const passwordInput = document.querySelector("#auth-password");
   const passwordToggle = document.querySelector("#toggle-password");
   const firstAdminToggle = document.querySelector("#first-admin-toggle");
+  const firstAdminStatus = document.querySelector("#auth-setup-status");
   const firstAdminName = document.querySelector("#first-admin-name");
   const firstAdminPasswordConfirm = document.querySelector("#first-admin-password-confirm");
   let creatingFirstAdmin = false;
@@ -184,12 +185,8 @@ function setupAuth() {
     submitLabel.textContent = createAdmin ? "Create admin account" : "Sign in";
     passwordInput.value = "";
     firstAdminPasswordConfirm.value = "";
-    if (createAdmin && firstAdminSetup?.email) {
-      document.querySelector("#auth-email").value = firstAdminSetup.email;
-      document.querySelector("#auth-email").readOnly = true;
-    } else {
-      document.querySelector("#auth-email").readOnly = false;
-    }
+    document.querySelector("#auth-email").readOnly = false;
+    firstAdminStatus.classList.add("is-hidden");
   };
   passwordToggle.addEventListener("click", () => {
     const showingPassword = passwordInput.type === "password";
@@ -217,7 +214,20 @@ function setupAuth() {
   void api("admin_setup").then((setup) => {
     firstAdminSetup = setup;
     firstAdminToggle.classList.toggle("is-hidden", !setup.available);
-  }).catch(displayError);
+    if (setup.reason === "not_configured") {
+      firstAdminStatus.textContent = "First-admin setup is disabled on this deployment. Set TAPLINK_ADMIN_EMAIL and TAPLINK_ADMIN_SIGNUP_ENABLED=true in Netlify environment variables, then redeploy.";
+      firstAdminStatus.classList.remove("is-hidden");
+    } else if (setup.reason === "already_initialized") {
+      firstAdminStatus.textContent = "First-admin setup is already complete. Sign in with the existing admin account.";
+      firstAdminStatus.classList.remove("is-hidden");
+    } else {
+      firstAdminStatus.textContent = "";
+      firstAdminStatus.classList.add("is-hidden");
+    }
+  }).catch((error) => {
+    firstAdminStatus.textContent = `Could not check first-admin setup: ${error.message}`;
+    firstAdminStatus.classList.remove("is-hidden");
+  });
   document.querySelector("#auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     clearAuthError();
@@ -229,9 +239,10 @@ function setupAuth() {
       const email = document.querySelector("#auth-email").value.trim();
       const password = document.querySelector("#auth-password").value;
       if (creatingFirstAdmin) {
-        if (!firstAdminSetup?.available || email.toLowerCase() !== firstAdminSetup.email?.toLowerCase()) {
-          throw new Error("First-admin setup is unavailable. Check the TAPLINK_ADMIN_EMAIL and TAPLINK_ADMIN_SIGNUP_ENABLED site settings.");
+        if (!firstAdminSetup?.available) {
+          throw new Error("First-admin setup is not available on this deployment. Reload this page or check the Netlify environment variables.");
         }
+        await api("admin_setup_check", { method: "POST", body: { email } });
         if (password !== firstAdminPasswordConfirm.value) {
           firstAdminPasswordConfirm.setAttribute("aria-invalid", "true");
           throw new Error("The passwords do not match.");

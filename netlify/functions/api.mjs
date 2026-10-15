@@ -332,13 +332,28 @@ async function handle(request, context) {
   }
   if (method === "GET" && action === "admin_setup") {
     if (!bootstrapAdminSignupEnabled || !bootstrapAdminEmail) {
-      return json(200, { available: false });
+      return json(200, { available: false, reason: "not_configured" });
     }
     const admins = await db.sql`select count(*)::int as count from profiles where role = 'admin'`;
     return json(200, {
       available: admins[0].count === 0,
-      email: admins[0].count === 0 ? bootstrapAdminEmail : undefined,
+      reason: admins[0].count === 0 ? "ready" : "already_initialized",
     });
+  }
+  if (method === "POST" && action === "admin_setup_check") {
+    if (!bootstrapAdminSignupEnabled || !bootstrapAdminEmail) {
+      return json(403, { error: "First-admin setup is not enabled for this deployment." });
+    }
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data.email !== "string") throw new ApiError(422, "Enter the configured first-admin email.");
+    const admins = await db.sql`select count(*)::int as count from profiles where role = 'admin'`;
+    if (admins[0].count > 0) throw new ApiError(403, "First-admin setup is already complete.");
+    if (data.email.trim().toLowerCase() !== bootstrapAdminEmail) {
+      throw new ApiError(403, "Use the email configured as TAPLINK_ADMIN_EMAIL in Netlify.");
+    }
+    return json(200, { ok: true });
   }
   if (!["GET", "POST"].includes(method)) throw new ApiError(405, "Method not allowed.");
 

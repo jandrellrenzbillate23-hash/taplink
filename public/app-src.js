@@ -154,6 +154,8 @@ function setupAuth() {
   const submitButton = document.querySelector("#auth-submit");
   const submitLabel = document.querySelector("#auth-submit-label");
   const spinner = document.querySelector("#auth-spinner");
+  const passwordInput = document.querySelector("#auth-password");
+  const passwordToggle = document.querySelector("#toggle-password");
   const clearAuthError = () => {
     authError.textContent = "";
     authError.classList.add("is-hidden");
@@ -161,6 +163,14 @@ function setupAuth() {
       input.removeAttribute("aria-invalid");
     });
   };
+  passwordToggle.addEventListener("click", () => {
+    const showingPassword = passwordInput.type === "password";
+    passwordInput.type = showingPassword ? "text" : "password";
+    passwordToggle.textContent = showingPassword ? "Hide" : "Show";
+    passwordToggle.setAttribute("aria-pressed", String(showingPassword));
+    passwordToggle.setAttribute("aria-label", `${showingPassword ? "Hide" : "Show"} password`);
+    passwordInput.focus();
+  });
   const setSubmitting = (submitting) => {
     submitButton.disabled = submitting;
     submitButton.setAttribute("aria-busy", String(submitting));
@@ -194,8 +204,10 @@ function setupAuth() {
       authError.classList.remove("is-hidden");
       const invalidInput = error?.status === 400 || error?.status === 422;
       if (invalidInput) {
-        document.querySelector("#auth-password").setAttribute("aria-invalid", "true");
+        passwordInput.setAttribute("aria-invalid", "true");
       }
+      authError.focus();
+      authError.scrollIntoView({ block: "nearest" });
     } finally {
       setSubmitting(false);
     }

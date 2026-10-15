@@ -4,28 +4,25 @@ TapLink is a responsive link-page app for personal and business profiles. Profil
 
 ## Deploy to Netlify
 
-Netlify does not execute PHP. The Netlify version uses the static `index.html` frontend, Netlify Functions, and Supabase for authentication, PostgreSQL data, and private photo storage. It starts with a fresh Supabase database; it does not import accounts, profiles, or photos from an existing MySQL installation.
+Netlify does not execute PHP. The Netlify version uses a static frontend, Netlify Functions, Netlify Identity for authentication, Netlify Database (managed PostgreSQL) for app data, and Netlify Blobs for private profile photos. It starts with a fresh database; it does not import accounts, profiles, or photos from an existing MySQL installation.
 
-1. Create a Supabase project.
-2. In the Supabase SQL Editor, run [`supabase/schema.sql`](./supabase/schema.sql).
-3. In Supabase **Authentication → URL Configuration**, set the Site URL to your Netlify URL and add that URL to the allowed redirect URLs. For local Netlify testing, add `http://localhost:8888`.
-4. In Netlify, connect this repository and use the settings from [`netlify.toml`](./netlify.toml): publish directory `public` and functions directory `netlify/functions`. The build command copies the shared styles and theme script into the curated publish folder. Deploy from the connected repository so Netlify also builds and deploys the Functions; do not publish the repository root.
-5. In the Netlify site’s environment variables, add these values for the Functions runtime:
-   - `SUPABASE_URL` — the project URL
-   - `SUPABASE_ANON_KEY` — the project’s anon/public API key
-   - `SUPABASE_SERVICE_ROLE_KEY` — the service-role secret; keep it private and never add it to frontend code
-6. Redeploy the Netlify site after setting the variables.
-7. Create the first account, then promote it to administrator in the Supabase SQL Editor. Replace the email with the account’s email:
+1. Create or connect the site in Netlify, then provision a Netlify Database for it using the Netlify UI or `netlify database init`.
+2. Enable Netlify Identity in the site’s identity settings and enable user registration if new accounts should be allowed.
+3. Connect this repository and deploy using [`netlify.toml`](./netlify.toml). It builds the frontend bundle and deploys the Functions. The publish directory must remain `public`; do not publish the repository root. Netlify must use Node.js 22.12.0 or later.
+4. The SQL migration in [`netlify/database/migrations/0001_taplink_schema.sql`](./netlify/database/migrations/0001_taplink_schema.sql) creates the application tables. Confirm the migration has been applied to the provisioned database.
+5. Create your first account and sign in so TapLink creates its profile row. In the Netlify Database SQL editor, promote that account to administrator; replace the email with its account email:
 
    ```sql
-   update auth.users
-   set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"role":"admin"}'::jsonb
+   update profiles
+   set role = 'admin'
    where lower(email) = lower('admin@example.com');
    ```
 
-   Sign out and back in for the administrator role to appear in the session.
+6. Reload the site to use the administrator tools.
 
-Supabase Auth controls whether new accounts can register. To close registration, disable new user sign-ups in the Supabase Authentication settings. Profile images are stored in a private Supabase Storage bucket and served using short-lived signed URLs. The curated `public` directory keeps PHP sources, database scripts, and local storage files out of Netlify's static publish output.
+Netlify Identity handles registration, login, and confirmation emails. Netlify Blobs stores profile photos privately and serves them through the API. The curated `public` directory keeps PHP sources, database migrations, and local storage files out of Netlify's static publish output.
+
+For local Netlify development, install dependencies and use `netlify dev` with the site linked and its Netlify services provisioned.
 
 ## Run the PHP version locally
 
@@ -69,7 +66,7 @@ For a public deployment, configure the database connection and administrator pas
 - Link buttons generated from the saved website, Instagram, Facebook, TikTok, LinkedIn, X, YouTube, WhatsApp, Telegram, phone, email, and location fields
 - Publish controls, shareable profile URL, dark mode, and public contact-card download
 - Administrator account and application-name management
-- Supabase authentication, row-level security for profile data, and protected Netlify Function operations
+- Netlify Identity authentication, Netlify Database persistence, private Netlify Blobs photo storage, and protected Netlify Function operations
 
 ## Important notes
 

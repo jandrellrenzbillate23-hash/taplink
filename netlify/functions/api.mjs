@@ -1,3 +1,7 @@
+import { getStore } from "@netlify/blobs";
+import { getDatabase } from "@netlify/database";
+import { admin, getUser } from "@netlify/identity";
+
 const socialHosts = {
   instagram: ["instagram.com"],
   facebook: ["facebook.com", "fb.com"],
@@ -9,6 +13,9 @@ const socialHosts = {
   telegram: ["t.me", "telegram.me", "telegram.org"],
 };
 
+const db = getDatabase();
+const photos = getStore("taplink-profile-photos");
+
 class ApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -16,123 +23,54 @@ class ApiError extends Error {
   }
 }
 
-function response(statusCode, payload) {
-  return {
-    statusCode,
+function json(status, data) {
+  return Response.json(data, {
+    status,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Type": "application/json; charset=utf-8",
       "X-Content-Type-Options": "nosniff",
     },
-    body: JSON.stringify(payload),
-  };
-}
-
-function configuration() {
-  const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !anonKey || !serviceKey) {
-    throw new ApiError(503, "Supabase is not configured. Set the required Netlify environment variables.");
-  }
-  return { url, anonKey, serviceKey };
-}
-
-async function supabase(path, { method = "GET", body, headers = {}, serviceKey } = {}) {
-  const { url, serviceKey: serviceRoleKey } = configuration();
-  const key = serviceKey ?? serviceRoleKey;
-  const result = await fetch(`${url}${path}`, {
-    method,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...headers,
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const text = await result.text();
-  let payload = null;
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new ApiError(502, "Supabase returned an invalid response.");
-    }
+}
+
+function slugFromName(name, userId) {
+  const prefix = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 26) || "member";
+  const suffix = userId.replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
+  return `${prefix}-${suffix}`;
+}
+
+async function ensureProfile(user) {
+  const defaultName = typeof user.userMetadata?.full_name === "string"
+    ? user.userMetadata.full_name.trim().slice(0, 120)
+    : "";
+  await db.sql`
+    insert into profiles (user_id, email, name, slug)
+    values (${user.id}, ${user.email ?? ""}, ${defaultName}, ${slugFromName(defaultName, user.id)})
+    on conflict (user_id) do update
+      set email = excluded.email,
+          name = case when profiles.name = '' then excluded.name else profiles.name end
+  `;
+  const rows = await db.sql`select * from profiles where user_id = ${user.id} limit 1`;
+  const profile = rows[0];
+  if (!profile) throw new ApiError(404, "Profile not found.");
+  return profile;
+}
+
+async function authenticatedUser() {
+  const user = await getUser();
+  if (!user) throw new ApiError(401, "Please sign in to continue.");
+  const profile = await ensureProfile(user);
+  if (!profile.is_active) {
+    throw new ApiError(401, "This account is no longer active. Please contact an administrator.");
   }
-  if (!result.ok) {
-    if (result.status === 409 || payload?.code === "23505") {
-      throw new ApiError(409, "That profile URL is already taken. Choose another one.");
-    }
-    console.error("Supabase request failed:", { path, status: result.status, code: payload?.code });
-    throw new ApiError(502, "The database request failed. Check the Supabase configuration and try again.");
+  return { user, profile };
+}
+
+async function requireAdmin(auth) {
+  if (auth.profile.role !== "admin") {
+    throw new ApiError(403, "Administrator access is required.");
   }
-  return payload;
-}
-
-function encodeFilter(value) {
-  return encodeURIComponent(value);
-}
-
-async function requestData(event) {
-  if (!event.body) return {};
-  const contentType = event.headers?.["content-type"] ?? event.headers?.["Content-Type"] ?? "";
-  if (contentType.includes("multipart/form-data")) {
-    const body = event.isBase64Encoded ? Buffer.from(event.body, "base64") : event.body;
-    const request = new Request(event.rawUrl ?? "https://taplink.invalid/api", {
-      method: event.httpMethod,
-      headers: { "content-type": contentType },
-      body,
-    });
-    return request.formData();
-  }
-  try {
-    const value = JSON.parse(event.body);
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new ApiError(400, "Invalid request body.");
-    }
-    return value;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(400, "Invalid JSON request body.");
-  }
-}
-
-async function authenticatedUser(event) {
-  const authorization = event.headers?.authorization ?? event.headers?.Authorization ?? "";
-  const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) throw new ApiError(401, "Please sign in to continue.");
-  const { url, anonKey } = configuration();
-  const result = await fetch(`${url}/auth/v1/user`, {
-    headers: { apikey: anonKey, Authorization: `Bearer ${token}` },
-  });
-  if (!result.ok) throw new ApiError(401, "Your session expired. Please sign in again.");
-  const user = await result.json();
-  if (isBanned(user)) throw new ApiError(401, "This account is no longer active. Please contact an administrator.");
-  return { user, token };
-}
-
-function isBanned(user) {
-  if (!user?.banned_until) return false;
-  const bannedUntil = Date.parse(user.banned_until);
-  return Number.isFinite(bannedUntil) && bannedUntil > Date.now();
-}
-
-async function profileForUser(userId) {
-  const rows = await supabase(`/rest/v1/profiles?select=*&user_id=eq.${encodeFilter(userId)}&limit=1`);
-  if (!rows?.[0]) throw new ApiError(404, "Profile not found.");
-  return rows[0];
-}
-
-async function signedPhotoUrl(photoPath) {
-  if (!photoPath) return null;
-  const result = await supabase("/storage/v1/object/sign/profile-photos/" + photoPath.split("/").map(encodeURIComponent).join("/"), {
-    method: "POST",
-    body: { expiresIn: 3600 },
-  });
-  const signedUrl = result?.signedURL ?? result?.signedUrl;
-  if (!signedUrl) throw new ApiError(502, "Could not create a profile photo link.");
-  return signedUrl.startsWith("http") ? signedUrl : `${configuration().url}/storage/v1${signedUrl}`;
+  return auth;
 }
 
 function requiredText(value, label, limit) {
@@ -268,208 +206,257 @@ function imageDimensions(bytes, mimeType) {
   return null;
 }
 
-async function requireAdmin(user) {
-  if (user.app_metadata?.role !== "admin") {
-    throw new ApiError(403, "Administrator access is required.");
+async function publicProfile(slug) {
+  if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) {
+    throw new ApiError(404, "Profile not found.");
   }
+  const rows = await db.sql`
+    select name, slug, profile_type, headline, company, bio, phone, public_email,
+           website, location, social_links, photo_path
+    from profiles
+    where slug = ${slug} and is_published = true and is_active = true
+    limit 1
+  `;
+  if (!rows[0]) throw new ApiError(404, "Profile not found or not published.");
+  return rows[0];
 }
 
-async function allAuthUsers() {
-  const users = [];
-  for (let page = 1; page <= 5; page += 1) {
-    const result = await supabase(`/auth/v1/admin/users?page=${page}&per_page=100`);
-    users.push(...(result.users ?? []));
-    if (!result.users || result.users.length < 100) break;
-  }
-  return users;
+function photoUrl(slug) {
+  return `/api?action=profile_photo&u=${encodeURIComponent(slug)}`;
 }
 
-async function handle(event) {
-  const method = event.httpMethod;
-  const action = event.queryStringParameters?.action;
-  if (method === "GET" && action === "config") {
-    const { url, anonKey } = configuration();
-    return response(200, { supabaseUrl: url, supabaseAnonKey: anonKey });
+async function profileSettings(auth) {
+  return {
+    ...auth.profile,
+    name: auth.profile.name || auth.user.userMetadata?.full_name || auth.user.email || "",
+    photo_url: auth.profile.photo_path ? photoUrl(auth.profile.slug) : null,
+    photo_path: undefined,
+  };
+}
+
+async function serveProfilePhoto(request, context, slug) {
+  const publicRows = await db.sql`
+    select user_id, slug, photo_path
+    from profiles
+    where slug = ${slug} and is_published = true and is_active = true
+    limit 1
+  `;
+  let profile = publicRows[0];
+  if (!profile) {
+    let auth;
+    try {
+      auth = await authenticatedUser();
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 404)) {
+        throw new ApiError(404, "Profile photo not found.");
+      }
+      throw error;
+    }
+    if (auth.profile.slug !== slug) throw new ApiError(404, "Profile photo not found.");
+    profile = auth.profile;
+  }
+  if (!profile.photo_path) throw new ApiError(404, "Profile photo not found.");
+  const image = await photos.get(profile.photo_path, { type: "blob" });
+  if (!image) throw new ApiError(404, "Profile photo not found.");
+  const extension = profile.photo_path.split(".").pop();
+  const mimeType = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" }[extension];
+  if (!mimeType) throw new ApiError(404, "Profile photo not found.");
+  return new Response(image, {
+    headers: {
+      "Cache-Control": "private, max-age=300",
+      "Content-Type": mimeType,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+    },
+  });
+}
+
+async function adminUsers() {
+  const identityUsers = [];
+  for (let page = 1; ; page += 1) {
+    const pageUsers = await admin.listUsers({ page, perPage: 100 });
+    identityUsers.push(...pageUsers);
+    if (pageUsers.length < 100) break;
+  }
+  const profiles = await db.sql`
+    select user_id, email, name, role, is_active, created_at
+    from profiles
+  `;
+  const byId = new Map(profiles.map((profile) => [profile.user_id, profile]));
+  return identityUsers.map((user) => {
+    const profile = byId.get(user.id);
+    return {
+      id: user.id,
+      name: profile?.name || user.userMetadata?.full_name || "",
+      email: profile?.email || user.email || "",
+      role: profile?.role || "user",
+      is_active: profile?.is_active === false ? 0 : 1,
+      created_at: profile?.created_at ?? user.createdAt,
+    };
+  }).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+async function handle(request, context) {
+  const url = new URL(request.url);
+  const method = request.method;
+  const action = url.searchParams.get("action") ?? "";
+
+  if (method === "GET" && action === "public_profile") {
+    const profile = await publicProfile(url.searchParams.get("u") ?? "");
+    return json(200, { profile: { ...profile, photo_url: profile.photo_path ? photoUrl(profile.slug) : null, photo_path: undefined } });
+  }
+  if (method === "GET" && action === "profile_photo") {
+    return serveProfilePhoto(request, context, url.searchParams.get("u") ?? "");
   }
   if (!["GET", "POST"].includes(method)) throw new ApiError(405, "Method not allowed.");
 
-  if (method === "GET" && action === "public_profile") {
-    const slug = event.queryStringParameters?.u ?? "";
-    if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) {
-      throw new ApiError(404, "Profile not found.");
-    }
-    const rows = await supabase(`/rest/v1/profiles?select=user_id,name,slug,profile_type,headline,company,bio,phone,public_email,website,location,social_links,photo_path&slug=eq.${encodeFilter(slug)}&is_published=eq.true&limit=1`);
-    if (!rows?.[0]) throw new ApiError(404, "Profile not found or not published.");
-    const profile = rows[0];
-    const account = await supabase(`/auth/v1/admin/users/${encodeURIComponent(profile.user_id)}`);
-    if (isBanned(account)) throw new ApiError(404, "Profile not found or not published.");
-    return response(200, { profile: { ...profile, photo_url: await signedPhotoUrl(profile.photo_path), photo_path: undefined } });
-  }
-
-  const { user } = await authenticatedUser(event);
+  const auth = await authenticatedUser();
   if (method === "GET" && action === "profile_settings") {
-    const profile = await profileForUser(user.id);
-    return response(200, {
-      profile: {
-        ...profile,
-        photo_url: await signedPhotoUrl(profile.photo_path),
-        photo_path: undefined,
-        name: profile.name || user.user_metadata?.name || "",
-      },
-    });
+    return json(200, { profile: await profileSettings(auth) });
   }
-
-  if (method === "POST") {
-    const data = await requestData(event);
-    if (action === "profile_save") {
-      const profile = validatedProfile(data);
-      const updated = await supabase(`/rest/v1/profiles?user_id=eq.${encodeFilter(user.id)}`, {
-        method: "PATCH",
-        body: { ...profile, updated_at: new Date().toISOString() },
-        headers: { Prefer: "return=representation" },
-      });
-      await supabase(`/auth/v1/admin/users/${encodeURIComponent(user.id)}`, {
-        method: "PUT",
-        body: { user_metadata: { ...user.user_metadata, name: profile.name } },
-      });
-      return response(200, { ok: true, slug: updated?.[0]?.slug ?? profile.slug, name: profile.name });
-    }
-    if (action === "profile_photo_upload") {
-      if (!(data instanceof FormData)) throw new ApiError(422, "Choose a profile photo to upload.");
-      const photo = data.get("photo");
-      if (!(photo instanceof File) || photo.size < 1 || photo.size > 5 * 1024 * 1024) {
-        throw new ApiError(422, "Profile photos must be smaller than 5 MB.");
-      }
-      const allowed = {
-        "image/jpeg": { ext: "jpg", matches: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-        "image/png": { ext: "png", matches: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
-        "image/webp": { ext: "webp", matches: (b) => String.fromCharCode(...b.slice(0, 4)) === "RIFF" && String.fromCharCode(...b.slice(8, 12)) === "WEBP" },
-      };
-      const imageType = allowed[photo.type];
-      const bytes = new Uint8Array(await photo.arrayBuffer());
-      if (!imageType || !imageType.matches(bytes)) {
-        throw new ApiError(422, "Choose a valid JPG, PNG, or WebP photo.");
-      }
-      const dimensions = imageDimensions(bytes, photo.type);
-      if (!dimensions || dimensions.width < 1 || dimensions.height < 1 || dimensions.width > 6000 || dimensions.height > 6000 || dimensions.width * dimensions.height > 24000000) {
-        throw new ApiError(422, "Choose an image with dimensions under 6000 × 6000 pixels.");
-      }
-      const profile = await profileForUser(user.id);
-      const path = `${user.id}/${crypto.randomUUID()}.${imageType.ext}`;
-      const { url, serviceKey } = configuration();
-      const upload = await fetch(`${url}/storage/v1/object/profile-photos/${path}`, {
-        method: "POST",
-        headers: {
-          apikey: serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
-          "Content-Type": photo.type,
-          "x-upsert": "false",
-        },
-        body: bytes,
-      });
-      if (!upload.ok) throw new ApiError(502, "The profile photo could not be stored.");
-      try {
-        await supabase(`/rest/v1/profiles?user_id=eq.${encodeFilter(user.id)}`, {
-          method: "PATCH",
-          body: { photo_path: path, updated_at: new Date().toISOString() },
-        });
-      } catch (error) {
-        await fetch(`${url}/storage/v1/object/profile-photos/${path}`, {
-          method: "DELETE",
-          headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-        });
-        throw error;
-      }
-      if (profile.photo_path) {
-        try {
-          await supabase("/storage/v1/object/profile-photos", {
-            method: "DELETE",
-            body: { prefixes: [profile.photo_path] },
-          });
-        } catch (error) {
-          console.error("TapLink could not remove the previous profile photo:", error);
-        }
-      }
-      return response(200, { ok: true, photo_url: await signedPhotoUrl(path) });
-    }
-    if (action === "profile_photo_delete") {
-      const profile = await profileForUser(user.id);
-      await supabase(`/rest/v1/profiles?user_id=eq.${encodeFilter(user.id)}`, {
-        method: "PATCH",
-        body: { photo_path: null, updated_at: new Date().toISOString() },
-      });
-      if (profile.photo_path) {
-        await supabase("/storage/v1/object/profile-photos", {
-          method: "DELETE",
-          body: { prefixes: [profile.photo_path] },
-        });
-      }
-      return response(200, { ok: true });
-    }
-    if (action === "admin_user_update") {
-      await requireAdmin(user);
-      if (typeof data.id !== "string" || !["user", "admin"].includes(data.role) || typeof data.active !== "boolean") {
-        throw new ApiError(422, "Invalid user update.");
-      }
-      if (data.id === user.id && (data.role !== "admin" || !data.active)) {
-        throw new ApiError(422, "You cannot remove your own administrator access.");
-      }
-      const users = await allAuthUsers();
-      const target = users.find((account) => account.id === data.id);
-      if (!target) throw new ApiError(404, "User not found.");
-      const activeAdmins = users.filter((account) => account.app_metadata?.role === "admin" && !isBanned(account)).length;
-      if (target.app_metadata?.role === "admin" && !isBanned(target) && (data.role !== "admin" || !data.active) && activeAdmins <= 1) {
-        throw new ApiError(422, "The last active administrator cannot be disabled or demoted.");
-      }
-      await supabase(`/auth/v1/admin/users/${encodeURIComponent(data.id)}`, {
-        method: "PUT",
-        body: {
-          app_metadata: { ...target.app_metadata, role: data.role },
-          ban_duration: data.active ? "none" : "876000h",
-        },
-      });
-      return response(200, { ok: true });
-    }
-    if (action === "admin_settings") {
-      await requireAdmin(user);
-      const appName = requiredText(data.app_name, "Application name", 80);
-      await supabase("/rest/v1/app_settings?on_conflict=setting_key", {
-        method: "POST",
-        body: { setting_key: "app_name", setting_value: appName, updated_at: new Date().toISOString() },
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-      });
-      return response(200, { ok: true });
-    }
-  }
-
   if (method === "GET" && action === "admin") {
-    await requireAdmin(user);
-    const users = await allAuthUsers();
-    const profiles = await supabase("/rest/v1/profiles?select=user_id,name,slug");
-    const profileByUserId = new Map((profiles ?? []).map((profile) => [profile.user_id, profile]));
-    const appNames = await supabase("/rest/v1/app_settings?select=setting_value&setting_key=eq.app_name&limit=1");
-    return response(200, {
-      stats: { users: users.length },
-      users: users.map((account) => ({
-        id: account.id,
-        name: profileByUserId.get(account.id)?.name || account.user_metadata?.name || "",
-        email: account.email ?? "",
-        role: account.app_metadata?.role === "admin" ? "admin" : "user",
-        is_active: isBanned(account) ? 0 : 1,
-        created_at: account.created_at,
-      })).sort((a, b) => b.created_at.localeCompare(a.created_at)),
-      appName: appNames?.[0]?.setting_value || "TapLink",
-    });
+    await requireAdmin(auth);
+    const [users, settings] = await Promise.all([
+      adminUsers(),
+      db.sql`select setting_value from app_settings where setting_key = 'app_name' limit 1`,
+    ]);
+    return json(200, { stats: { users: users.length }, users, appName: settings[0]?.setting_value || "TapLink" });
   }
+
+  if (method !== "POST") throw new ApiError(404, "Not found.");
+
+  if (action === "profile_save") {
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new ApiError(400, "Invalid request body.");
+    const profile = validatedProfile(data);
+    try {
+      await db.sql`
+        update profiles set
+          name = ${profile.name}, slug = ${profile.slug}, profile_type = ${profile.profile_type},
+          headline = ${profile.headline}, company = ${profile.company}, bio = ${profile.bio},
+          phone = ${profile.phone}, public_email = ${profile.public_email}, website = ${profile.website},
+          location = ${profile.location}, social_links = ${JSON.stringify(profile.social_links)}::jsonb,
+          is_published = ${profile.is_published}, updated_at = now()
+        where user_id = ${auth.user.id}
+      `;
+    } catch (error) {
+      if (error.code === "23505") throw new ApiError(409, "That profile URL is already taken. Choose another one.");
+      throw error;
+    }
+    return json(200, { ok: true, slug: profile.slug, name: profile.name });
+  }
+
+  if (action === "profile_photo_upload") {
+    let form;
+    try {
+      form = await request.formData();
+    } catch {
+      throw new ApiError(400, "Choose a valid profile photo.");
+    }
+    const photo = form.get("photo");
+    if (!photo || typeof photo.arrayBuffer !== "function" || photo.size < 1 || photo.size > 5 * 1024 * 1024) {
+      throw new ApiError(422, "Profile photos must be smaller than 5 MB.");
+    }
+    const imageTypes = {
+      "image/jpeg": { extension: "jpg", matches: (bytes) => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff },
+      "image/png": { extension: "png", matches: (bytes) => bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 },
+      "image/webp": { extension: "webp", matches: (bytes) => String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP" },
+    };
+    const imageType = imageTypes[photo.type];
+    const bytes = new Uint8Array(await photo.arrayBuffer());
+    if (!imageType || !imageType.matches(bytes)) throw new ApiError(422, "Choose a valid JPG, PNG, or WebP photo.");
+    const dimensions = imageDimensions(bytes, photo.type);
+    if (!dimensions || dimensions.width < 1 || dimensions.height < 1 || dimensions.width > 6000 || dimensions.height > 6000 || dimensions.width * dimensions.height > 24000000) {
+      throw new ApiError(422, "Choose an image with dimensions under 6000 × 6000 pixels.");
+    }
+    const path = `${auth.user.id}/${crypto.randomUUID()}.${imageType.extension}`;
+    await photos.set(path, bytes, { metadata: { contentType: photo.type } });
+    try {
+      await db.sql`
+        update profiles set photo_path = ${path}, updated_at = now()
+        where user_id = ${auth.user.id}
+      `;
+    } catch (error) {
+      await photos.delete(path);
+      throw error;
+    }
+    if (auth.profile.photo_path) {
+      try {
+        await photos.delete(auth.profile.photo_path);
+      } catch (error) {
+        console.error("TapLink could not remove the previous profile photo:", error);
+      }
+    }
+    return json(200, { ok: true, photo_url: photoUrl(auth.profile.slug) });
+  }
+
+  if (action === "profile_photo_delete") {
+    await db.sql`
+      update profiles set photo_path = null, updated_at = now()
+      where user_id = ${auth.user.id}
+    `;
+    if (auth.profile.photo_path) {
+      try {
+        await photos.delete(auth.profile.photo_path);
+      } catch (error) {
+        console.error("TapLink could not remove the profile photo:", error);
+      }
+    }
+    return json(200, { ok: true });
+  }
+
+  if (action === "admin_user_update") {
+    await requireAdmin(auth);
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data !== "object" || typeof data.id !== "string" || !["user", "admin"].includes(data.role) || typeof data.active !== "boolean") {
+      throw new ApiError(422, "Invalid user update.");
+    }
+    if (data.id === auth.user.id && (data.role !== "admin" || !data.active)) {
+      throw new ApiError(422, "You cannot remove your own administrator access.");
+    }
+    const targetRows = await db.sql`select role, is_active from profiles where user_id = ${data.id} limit 1`;
+    const target = targetRows[0];
+    if (!target) throw new ApiError(404, "User not found.");
+    if (target.role === "admin" && target.is_active && (data.role !== "admin" || !data.active)) {
+      const admins = await db.sql`select count(*)::int as count from profiles where role = 'admin' and is_active = true`;
+      if (admins[0].count <= 1) throw new ApiError(422, "The last active administrator cannot be disabled or demoted.");
+    }
+    await db.sql`
+      update profiles set role = ${data.role}, is_active = ${data.active}, updated_at = now()
+      where user_id = ${data.id}
+    `;
+    return json(200, { ok: true });
+  }
+
+  if (action === "admin_settings") {
+    await requireAdmin(auth);
+    const data = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON request body.");
+    });
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new ApiError(400, "Invalid request body.");
+    const appName = requiredText(data.app_name, "Application name", 80);
+    await db.sql`
+      insert into app_settings (setting_key, setting_value, updated_at)
+      values ('app_name', ${appName}, now())
+      on conflict (setting_key) do update
+        set setting_value = excluded.setting_value, updated_at = now()
+    `;
+    return json(200, { ok: true });
+  }
+
   throw new ApiError(404, "Not found.");
 }
 
-export const handler = async (event) => {
+export default async (request, context) => {
   try {
-    return await handle(event);
+    return await handle(request, context);
   } catch (error) {
-    if (error instanceof ApiError) return response(error.status, { error: error.message });
+    if (error instanceof ApiError) return json(error.status, { error: error.message });
     console.error("TapLink API request failed:", error);
-    return response(500, { error: "The request could not be completed. Check the Supabase and Netlify configuration." });
+    return json(500, { error: "The request could not be completed. Check the Netlify Database and Identity configuration." });
   }
 };

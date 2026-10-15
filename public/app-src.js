@@ -1,3 +1,5 @@
+import { getUser, handleAuthCallback, login, logout, onAuthChange, signup } from "@netlify/identity";
+
 const toast = (message, kind = "success") => {
   const item = document.createElement("div");
   item.className = `toast toast-${kind}`;
@@ -14,22 +16,8 @@ function displayError(error) {
   toast(error instanceof Error ? error.message : "Something went wrong. Please try again.", "error");
 }
 
-const configResponse = await fetch("/api?action=config");
-const config = await configResponse.json();
-if (!configResponse.ok) {
-  toast(config.error || "Could not load the TapLink configuration.", "error");
-  throw new Error(config.error || "Could not load the TapLink configuration.");
-}
-
-const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-const supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-});
-
 async function api(action, { method = "GET", body } = {}) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const headers = session ? { Authorization: `Bearer ${session.access_token}` } : {};
-  const options = { method, headers };
+  const options = { method, credentials: "same-origin", headers: {} };
   if (body instanceof FormData) {
     options.body = body;
   } else if (body !== undefined) {
@@ -87,6 +75,7 @@ async function loadProfileSettings() {
   });
   setProfilePhoto(profile.photo_url);
   setProfileLink(profile.slug, profile.is_published);
+  return profile;
 }
 
 function activateView(viewName) {
@@ -227,17 +216,27 @@ function setupAuth() {
     try {
       const email = document.querySelector("#auth-email").value.trim();
       const password = document.querySelector("#auth-password").value;
-      const result = mode === "register"
-        ? await supabase.auth.signUp({ email, password, options: { data: { name: document.querySelector("#auth-name").value.trim() }, emailRedirectTo: location.origin } })
-        : await supabase.auth.signInWithPassword({ email, password });
-      if (result.error) throw result.error;
-      if (mode === "register" && !result.data.session) {
+      if (mode === "register") {
+        await signup(email, password, { full_name: document.querySelector("#auth-name").value.trim() });
+        const currentUser = await getUser();
+        if (!currentUser) {
+          dialog.close();
+          toast("Check your email to confirm your account, then sign in.");
+          return;
+        }
         dialog.close();
-        toast("Check your email to confirm your account, then sign in.");
+        await updateSession(currentUser);
+        return;
+      }
+      await login(email, password);
+      const currentUser = await getUser();
+      if (!currentUser) {
+        dialog.close();
+        toast("Your sign-in is not active. Please try again.");
         return;
       }
       dialog.close();
-      await updateSession(result.data.session ?? (await supabase.auth.getSession()).data.session);
+      await updateSession(currentUser);
     } catch (error) {
       displayError(error);
     } finally {
@@ -254,12 +253,12 @@ async function updateSession(session) {
   landing.classList.toggle("is-hidden", Boolean(session));
   workspace.classList.toggle("is-hidden", !session);
   if (!session) return;
-  const name = session.user.user_metadata?.name || session.user.email || "TapLink user";
+  const name = session.userMetadata?.full_name || session.email || "TapLink user";
   document.querySelector("#header-name").textContent = name;
   document.querySelector("#user-avatar").textContent = Array.from(name)[0]?.toUpperCase() || "T";
-  const isAdmin = session.user.app_metadata?.role === "admin";
+  const profile = await loadProfileSettings();
+  const isAdmin = profile.role === "admin";
   document.querySelector("#admin-nav").classList.toggle("is-hidden", !isAdmin);
-  await loadProfileSettings();
   const profileName = document.querySelector("#profile-name").value || name;
   document.querySelector("#header-name").textContent = profileName;
   document.querySelector("#user-avatar").textContent = Array.from(profileName)[0]?.toUpperCase() || "T";
@@ -283,8 +282,11 @@ function setupWorkspace() {
     location.hash = link.dataset.view;
   }));
   document.querySelector("#logout-button").addEventListener("click", async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) return displayError(error);
+    try {
+      await logout();
+    } catch (error) {
+      return displayError(error);
+    }
     location.reload();
   });
   document.querySelector("#profile-form").addEventListener("submit", async (event) => {
@@ -408,9 +410,13 @@ if (profileSlug) {
     document.querySelector("#site-shell").classList.add("is-hidden");
   }
 } else {
-  const { data: { session } } = await supabase.auth.getSession();
-  await updateSession(session);
-  supabase.auth.onAuthStateChange((_event, nextSession) => {
-    window.setTimeout(() => updateSession(nextSession).catch(displayError), 0);
-  });
+  try {
+    await handleAuthCallback();
+    await updateSession(await getUser());
+    onAuthChange((_event, user) => {
+      window.setTimeout(() => updateSession(user).catch(displayError), 0);
+    });
+  } catch (error) {
+    displayError(error);
+  }
 }

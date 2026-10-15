@@ -95,7 +95,11 @@
       <label class="field-label" for="auth-email">Email address</label><input class="field" id="auth-email" type="email" required autocomplete="email">
       <label class="field-label" for="auth-password">Password</label><input class="field" id="auth-password" type="password" minlength="10" maxlength="200" required autocomplete="new-password">
       <p class="field-help" id="password-hint">Use at least 10 characters.</p>
-      <button class="button button-primary button-wide" id="auth-submit" type="submit">Create account</button>
+      <p class="auth-error is-hidden" id="auth-error" role="alert" aria-live="assertive"></p>
+      <button class="button button-primary button-wide" id="auth-submit" type="submit">
+        <span class="auth-spinner is-hidden" id="auth-spinner" aria-hidden="true"></span>
+        <span id="auth-submit-label">Create account</span>
+      </button>
     </form>
     <p class="auth-switch"><span id="auth-switch-copy">Already have an account?</span> <button class="text-link" id="auth-switch-button" type="button">Log in</button></p>
   </dialog>

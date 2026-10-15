@@ -43,6 +43,10 @@ h3 { font-size: 1.08rem; }
 .button-small { min-height: 35px; padding: 0 12px; border-radius: 9px; font-size: .78rem; }
 .button-large { min-height: 52px; padding: 0 21px; border-radius: 13px; }
 .button-wide { width: 100%; margin-top: 18px; }
+.button:disabled { cursor: wait; opacity: .75; }
+.auth-spinner { width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: auth-spin .7s linear infinite; }
+.auth-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #f4d4d2; border-radius: 9px; color: #a03939; background: #fff7f6; font-size: .86rem; line-height: 1.45; }
+@keyframes auth-spin { to { transform: rotate(360deg); } }
 .text-link { padding: 0; border: 0; color: var(--purple-dark); background: transparent; font-size: .85rem; font-weight: 700; }
 .text-link span { margin-left: 4px; }
 .icon-button { display: inline-grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid transparent; border-radius: 9px; color: #737383; background: transparent; font-size: 1.1rem; }

@@ -190,12 +190,32 @@ async function showPublicProfile(slug) {
 
 function setupAuth() {
   const dialog = document.querySelector("#auth-dialog");
+  const authError = document.querySelector("#auth-error");
+  const submitButton = document.querySelector("#auth-submit");
+  const submitLabel = document.querySelector("#auth-submit-label");
+  const spinner = document.querySelector("#auth-spinner");
   let mode = "register";
+  const clearAuthError = () => {
+    authError.textContent = "";
+    authError.classList.add("is-hidden");
+    document.querySelectorAll("#auth-name, #auth-email, #auth-password").forEach((input) => {
+      input.removeAttribute("aria-invalid");
+    });
+  };
+  const setSubmitting = (submitting) => {
+    submitButton.disabled = submitting;
+    submitButton.setAttribute("aria-busy", String(submitting));
+    spinner.classList.toggle("is-hidden", !submitting);
+    submitLabel.textContent = submitting
+      ? (mode === "register" ? "Creating account…" : "Signing in…")
+      : (mode === "register" ? "Create account" : "Log in");
+  };
   const setMode = (nextMode) => {
     mode = nextMode;
+    clearAuthError();
     const registering = mode === "register";
     document.querySelector("#auth-title").textContent = registering ? "Create your account" : "Welcome back";
-    document.querySelector("#auth-submit").textContent = registering ? "Create account" : "Log in";
+    submitLabel.textContent = registering ? "Create account" : "Log in";
     document.querySelector("#register-name-row").classList.toggle("is-hidden", !registering);
     document.querySelector("#auth-name").required = registering;
     document.querySelector("#auth-password").autocomplete = registering ? "new-password" : "current-password";
@@ -205,15 +225,22 @@ function setupAuth() {
     document.querySelector("#auth-switch-button").textContent = registering ? "Log in" : "Create an account";
   };
   document.querySelectorAll("[data-open-auth]").forEach((button) => button.addEventListener("click", () => {
+    clearAuthError();
     setMode(button.dataset.openAuth);
     dialog.showModal();
   }));
   document.querySelector("#auth-switch-button").addEventListener("click", () => setMode(mode === "register" ? "login" : "register"));
+  document.querySelectorAll("#auth-name, #auth-email, #auth-password").forEach((input) => {
+    input.addEventListener("input", clearAuthError);
+  });
   document.querySelector("#auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = document.querySelector("#auth-submit");
-    button.disabled = true;
+    clearAuthError();
+    setSubmitting(true);
     try {
+      if (location.protocol === "file:") {
+        throw new Error("Sign-in requires the deployed Netlify site or `netlify dev`; opening this file directly cannot reach Netlify Identity.");
+      }
       const email = document.querySelector("#auth-email").value.trim();
       const password = document.querySelector("#auth-password").value;
       if (mode === "register") {
@@ -224,23 +251,24 @@ function setupAuth() {
           toast("Check your email to confirm your account, then sign in.");
           return;
         }
-        dialog.close();
         await updateSession(currentUser);
-        return;
-      }
-      await login(email, password);
-      const currentUser = await getUser();
-      if (!currentUser) {
         dialog.close();
-        toast("Your sign-in is not active. Please try again.");
         return;
       }
-      dialog.close();
+      const currentUser = await login(email, password);
       await updateSession(currentUser);
+      dialog.close();
     } catch (error) {
-      displayError(error);
+      authError.textContent = error instanceof Error
+        ? error.message
+        : "Something went wrong. Please try again.";
+      authError.classList.remove("is-hidden");
+      const invalidInput = error?.status === 400 || error?.status === 422;
+      if (invalidInput) {
+        document.querySelector("#auth-password").setAttribute("aria-invalid", "true");
+      }
     } finally {
-      button.disabled = false;
+      setSubmitting(false);
     }
   });
 }

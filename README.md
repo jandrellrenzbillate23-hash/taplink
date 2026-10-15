@@ -7,20 +7,13 @@ TapLink is a responsive link-page app for personal and business profiles. Profil
 Netlify does not execute PHP. The Netlify version uses a static frontend, Netlify Functions, Netlify Identity for administrator authentication, and Netlify Database (managed PostgreSQL) for app data. Customer pages do not have accounts; administrators create and manage their pages and share the resulting link. It starts with a fresh customer-page database; it does not import accounts, profiles, or photos from an existing MySQL installation.
 
 1. Create or connect the site in Netlify, then provision a Netlify Database for it using the Netlify UI or `netlify database init`.
-2. In the Netlify site dashboard, open **Site configuration → Identity** and enable Identity. Verify `https://<your-site>/.netlify/identity/settings` returns JSON (not a 404). Create or invite the site administrator through Identity, and disable public sign-ups in the Identity settings. Customers do not create accounts; administrators create and manage their link pages in TapLink.
+2. In the Netlify site dashboard, open **Site configuration → Identity** and enable Identity. Verify `https://<your-site>/.netlify/identity/settings` returns JSON (not a 404). Create or invite the site administrator through Identity and complete the email confirmation/invitation. Disable public sign-ups in Identity. Customers do not create accounts; administrators create and manage their link pages in TapLink.
 3. Connect this repository and deploy using [`netlify.toml`](./netlify.toml). It builds the frontend bundle and deploys the Functions. The publish directory must remain `public`; do not publish the repository root. Netlify must use Node.js 22.12.0 or later.
 4. Netlify applies SQL migrations from `netlify/database/migrations/` during deployment, including the customer page table.
-5. Sign in once as the administrator so TapLink creates the administrator profile row. In the Netlify Database SQL editor, promote that account; replace the email with the administrator’s email:
+5. In Netlify site environment variables, set `TAPLINK_ADMIN_EMAIL` to the exact confirmed Identity email that should receive the first administrator role. Redeploy after changing the variable.
+6. Sign in to the deployed TapLink site with that confirmed Identity account. TapLink creates the associated database profile and assigns its admin role automatically on sign-in. Remove `TAPLINK_ADMIN_EMAIL` after the initial setup; the stored role remains. The dashboard can then create customer pages, choose from six designs, publish or edit pages, and copy each customer’s shareable link.
 
-   ```sql
-   update profiles
-   set role = 'admin'
-   where lower(email) = lower('admin@example.com');
-   ```
-
-6. Sign in again or reload. The admin dashboard can now create customer pages, choose from six designs, publish or edit pages, and copy each customer’s shareable link.
-
-Netlify Identity is used only for administrator sign-in. Keep public registration disabled in the Netlify Identity settings; the site intentionally has no customer signup flow. Customer photos can be provided as HTTPS image URLs. The curated `public` directory keeps PHP sources, database migrations, and local storage files out of Netlify's static publish output.
+Netlify Identity is used only for administrator sign-in. Keep public registration disabled in the Netlify Identity settings; the site intentionally has no customer signup flow. Identity accounts/passwords are separate from the Netlify Database: importing or creating database rows does not create login credentials. Customer photos can be provided as HTTPS image URLs. The curated `public` directory keeps PHP sources, database migrations, and local storage files out of Netlify's static publish output.
 
 For local Netlify development, install dependencies and use `netlify dev` with the site linked and its Netlify services provisioned.
 

@@ -13,6 +13,7 @@ const socialHosts = {
   telegram: ["t.me", "telegram.me", "telegram.org"],
 };
 const pageTemplates = ["studio", "noir", "editorial", "orbit", "garden", "card"];
+const bootstrapAdminEmail = process.env.TAPLINK_ADMIN_EMAIL?.trim().toLowerCase();
 
 const db = getDatabase();
 const photos = getStore("taplink-profile-photos");
@@ -44,12 +45,22 @@ async function ensureProfile(user) {
   const defaultName = typeof user.userMetadata?.full_name === "string"
     ? user.userMetadata.full_name.trim().slice(0, 120)
     : "";
+  const isBootstrapAdmin = Boolean(
+    bootstrapAdminEmail
+      && user.email
+      && user.email.trim().toLowerCase() === bootstrapAdminEmail,
+  );
   await db.sql`
-    insert into profiles (user_id, email, name, slug)
-    values (${user.id}, ${user.email ?? ""}, ${defaultName}, ${slugFromName(defaultName, user.id)})
+    insert into profiles (user_id, email, name, slug, role)
+    values (
+      ${user.id}, ${user.email ?? ""}, ${defaultName},
+      ${slugFromName(defaultName, user.id)},
+      case when ${isBootstrapAdmin} then 'admin' else 'user' end
+    )
     on conflict (user_id) do update
       set email = excluded.email,
-          name = case when profiles.name = '' then excluded.name else profiles.name end
+          name = case when profiles.name = '' then excluded.name else profiles.name end,
+          role = case when ${isBootstrapAdmin} then 'admin' else profiles.role end
   `;
   const rows = await db.sql`select * from profiles where user_id = ${user.id} limit 1`;
   const profile = rows[0];
